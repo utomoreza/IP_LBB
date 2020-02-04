@@ -1,0 +1,5 @@
+Berikut point penilaian untuk LBB Interactive Plotting:
+
+- Tahapan data pre-processing menggunakan dplyr
+- Plot yang ditampilkan pada dashboard sudah interaktif
+- Setiap plot yang ditampilkan menampilkan informasi yang relevan dari dashboard

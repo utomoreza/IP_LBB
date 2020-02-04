@@ -1,0 +1,1267 @@
+---
+title: "Glassdoor US Job Market Data"
+author: "Reza Dwi Utomo @utomoreza"
+date: "02/02/2020"
+output:
+  html_document:
+    highlight: zenburn
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: yes
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+![](Glassdoor_img.png)
+
+# Introduction
+
+## Background
+
+This article aims to meet the second LBB (Learn by Building) assignment from Algoritma, i.e. [Data Visualization](https://algorit.ma/course/data-visualization/) course. This article is based on [P4DS LBB](https://github.com/utomoreza/P4DS_LBB) article. However, there are some improvements which are as follows:
+
+* The usage of `dplyr` package is emphasized.
+* More research questions are provided.
+* More figures are provided.
+* `ggplot2` and `plotly` packages are utilized to plot the data instead of base plot.
+
+In this article, you could expect to find the following sections:
+
+* Introduction of the article can be found in here [Introduction](#intro)
+* More detailed explanation of the data is in [Dataset](#daset)
+* How to prepare the data can be read in [Preparation](#prep)
+* Steps to clean and pre-process the data is in [Data Pre-processing](#dapre)
+* Discussion about solving the pre-defined problems is described in [Analysis](#analys)
+* Conclusions of the article can be read in [Conclusions](#concl)
+
+## Objectives
+
+By arranging this article, I'm going to tackle with these problems as follows:
+
+1. What is the job title paid the most in each area in every given year?
+2. Which top 5 sectors do pay salary the most in Boston every year?
+3. Is it true that a company with more than 5000 employees in San Francisco pays its employees' salary higher than a startup (a company with employees equal or less than 200) in NYC? Show the data in every year!
+4. What is the relationship between salary and job openings in the US?
+5. Compare salaries of each area from Metro Median Pay and US Median Pay from Quick Facts!
+6. Show distributions of company size's salary and job openings!
+
+# Dataset {#daset}
+
+The data are compiled monthly by Glassdoor from 2016. Each monthly datum is in .xlsx extension file. The columns of each of it consist of:
+
+* Metro
+
+Some metropolitan areas in the US. The National value indicates data from national area.
+
+* Dimension Type
+
+Type of data we want, e.g. Quick Facts (facts about median salary and job openings), Industry (sectors of the jobs), and so on.
+
+* Month
+
+The time format of the data.
+
+* Dimension
+
+This is the derivative of Dimension Type column. All options here depend on Dimension Type.
+
+* Measure
+
+This column determines what method of measurement used.
+
+* Value
+
+Depending on Dimension Type and Dimension columns you chose, this Value column contains either median salary or number of job openings. The value with '$' (dollar) sign indicates salary in USD.
+
+* YoY
+
+Year over year in percent. For more information about how to understand and calculate YoY, you can read this [article](https://www.sisense.com/blog/calculate-year-year-growth/) I found really helpful. However, in this article, I won't highlight this YoY feature.
+
+Below is a quick look of the data in spreadsheet application.
+
+![](data_screenshot.png)
+
+For more information regarding the data, you can read its methodology written exclusively by Glassdoor [here](https://www.glassdoor.com/research/app/uploads/sites/2/2019/04/Methodology-Glassdoor-Job-Market-Report-2-2.pdf).
+
+# Preparation {#prep}
+
+We have identified the data, so now we're going to prepare the data. Although the total data started from 2016, in this article, I only use monthly data from 2018 and 2019; there are 24 .xlsx files. It will be time consuming and exhausting if we download each file one by one manually. Therefore, here we're going to scrape the Glassdoor web page and download all necessary files automatically.
+
+## Load Necessary Packages
+
+First thing first, we must load all libraries needed.
+
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(rvest)
+library(lubridate)
+library(zoo)
+library(openxlsx)
+library(tidyverse)
+library(ggthemes)
+library(scales)
+library(plotly)
+```
+
+## Download and Save the Data
+
+In the code chunk below, we're going to define a function called `get_xls_file_from_html()` used to scrape Glassdoor web page and download all .xlsx files there and save them in local directory with appropriate file names.
+
+```{r}
+get_xls_file_from_html <- function() {
+     dataurl <- "https://www.glassdoor.com/research/job-market-report-historical/"
+     page <- read_html(dataurl)
+     
+     excels1 <- grep("\\.xlsx", html_nodes(page, "a"), value = T)
+     excels2 <- gsub(".*href=\"", "", excels1)
+     excels <- gsub("xlsx.*", "xlsx", excels2)
+     excels_path <- as.character(sapply(excels,
+                                        FUN = substr,
+                                        start = 64,
+                                        stop = max(sapply(excels, nchar))))
+     excels_path1_31 <- gsub(".*data-", "", excels_path[1:31])
+     excels_path[32] <- "2017-05.xlsx"
+     excels_path[33] <- "2017-04.xlsx"
+     excels_path[34] <- "2017-03.xlsx"
+     excels_path[35] <- "2017-02.xlsx"
+     excels_path[36] <- "2017-01.xlsx"
+     excels_path[37] <- "2016-12.xlsx"
+     excels_path[38] <- "2016-11.xlsx"
+     excels_path[39] <- "2016-10.xlsx"
+     
+     excels_path <- c(excels_path1_31, excels_path[32:39])
+     
+     destination <- paste("./datasets/", excels_path, sep = "")
+     
+     #file extraction
+     mapply(function(x, y) download.file(x, y, mode="wb"), x = excels, y = destination)
+}
+```
+
+The code chunk below is used to check whether we've had the xlsx files already in our local directory. If they do not exist, `get_xls_file_from_html()` will be excuted.
+
+```{r, warning=FALSE, results='hide'}
+load("filespath.RData")
+
+checkIfFilesExist <- function(path){
+  if (!file.exists(path)) {
+    get_xls_file_from_html()
+  }
+}
+```
+
+## Load the Data into RStudio
+
+In order to load each monthly xlsx file into RStudio, we define a function `select_files_to_read()`.
+
+```{r}
+select_files_to_read <- function(month = "Dec", year = 2019) {
+    load("filespath.RData")
+
+    if (month == "Dec") {
+        month_num = 1
+    } else if (month == "Nov") {
+        month_num = 2
+    } else if (month == "Oct") {
+        month_num = 3
+    } else if (month == "Sep") {
+        month_num = 4
+    } else if (month == "Aug") {
+        month_num = 5
+    } else if (month == "Jul") {
+        month_num = 6
+    } else if (month == "Jun") {
+        month_num = 7
+    } else if (month == "May") {
+        month_num = 8
+    } else if (month == "Apr") {
+        month_num = 9
+    } else if (month == "Mar") {
+        month_num = 10
+    } else if (month == "Feb") {
+        month_num = 11
+    } else {
+        month_num = 12
+    }
+
+    files <- list("2019" = filespath[1:12],
+                  "2018" = filespath[13:24],
+                  "2017" = filespath[25:36],
+                  "2016" = filespath[37:39])
+
+    if (year == 2016) {
+        yearOrder <- 4
+        if (month == "Dec" | month == "Nov" | month == "Oct") {
+            xlsname <<- paste0(month, year)
+            year_char <- as.character(year)
+            tempfilename <<- as.data.frame(read_xlsx(files[[yearOrder]][month_num]))
+        } else {
+            stop("Year 2016 have Dec, Nov and Oct files only.")
+        }
+    } else {
+        xlsname <<- paste0(month, year)
+        if (year == 2019) {
+            yearOrder <- 1
+        } else if (year == 2018) {
+            yearOrder <- 2
+        } else {
+            yearOrder <- 3
+        }
+        tempfilename <<- as.data.frame(read_xlsx(files[[yearOrder]][month_num]))
+    }
+}
+
+dump("select_files_to_read", file = "select_files_to_read.R")
+```
+
+And now call the `select_files_to_read()` then insert it into another function `loadMultipleFiles()`. The latter works to iterate `select_files_to_read()` function in specified number of years fully.
+
+```{r}
+loadMultipleFiles <- function(nmonth = c("Dec"), nyear = c(2019)) {
+     files_list1 <- list()
+     year <- 1:length(nyear)
+     month <- 1:length(nmonth)
+     totalIterate <<- length(nmonth) * length(nyear)
+     
+     for (i in year) {
+          if (length(year) == 1) {
+               for (j in month) {
+                    select_files_to_read(nmonth[j], nyear)
+                    files_list1[[j]] <- tempfilename
+                    names(files_list1)[j] <- xlsname
+               }
+               break
+          }
+          for (j in month) {
+               
+               select_files_to_read(nmonth[j], nyear[i])
+               files_list1[[j]] <- tempfilename
+               names(files_list1)[j] <- xlsname
+               
+          }
+          
+     }
+     files_list <<- files_list1
+}
+```
+
+After we've defined both functions above, now we're going to use them by setting their arguments in order to load all monthly files in 2018 and 2019. The outputs of below chunk are dataframes of each monthly file.
+
+```{r}
+loadMultipleFiles(
+  nmonth = c("Dec","Nov","Oct","Sep","Aug","Jul","Jun","May","Apr","Mar","Feb","Jan"),
+  nyear = c(2018))
+
+for (k in 1:totalIterate) {
+     
+     assign(names(files_list)[k], as.data.frame(files_list[[k]]))
+     
+}
+
+loadMultipleFiles(
+  nmonth = c("Dec","Nov","Oct","Sep","Aug","Jul","Jun","May","Apr","Mar","Feb","Jan"),
+  nyear = c(2019))
+
+for (k in 1:totalIterate) {
+     
+     assign(names(files_list)[k], as.data.frame(files_list[[k]]))
+     
+}
+```
+
+## Combine months DFs into 1 DF (year)
+
+After we've got all monthly dataframes, we should combine them in a single dataframe of year.
+
+```{r}
+year2019 <- rbind(Apr2019, Aug2019, Dec2019, Feb2019, Jan2019, Jul2019, Jun2019, Mar2019, May2019, Nov2019, Oct2019, Sep2019)
+
+year2018 <- rbind(Apr2018, Aug2018, Dec2018, Feb2018, Jan2018, Jul2018, Jun2018, Mar2018, May2018, Nov2018, Oct2018, Sep2018)
+
+year20182019 <- rbind(year2018, year2019)
+
+## if you want, you can save the year dataframe as xls file in local directory
+# write.xlsx(year2019, "./datasets/year2019.xlsx")
+# write.xlsx(year2018, "./datasets/year2018.xlsx")
+# write.xlsx(year20182019, "./datasets/year2018-2019.xlsx")
+
+# for ease of use and saving more memory, we need to remove all unnecessary objects
+temp_objects <- ls()
+rm(list = temp_objects[!temp_objects %in% c("year20182019")])
+rm(temp_objects)
+```
+
+Yeah! Finally, we've got our prepared file! Let's move on to clean it.
+
+# Data Pre-processing {#dapre}
+
+First of all, since the file used is big enough, it is recommended to open it in any Spreadsheet application in advance to obtain and explore a quick insight regarding the data.
+
+After viewing the file in Spreadsheet application more detail as shown in the picture in [Introduction](#intro), firstly, we focus on `Dimension Type` column as it explains different information as follows:
+
+1. Company Size
+
+This value has the following Dimensions:
+  
+  + <51 employees
+  + 51-200 employees
+  + 201-500 employees
+  + 501-1000 employees
+  + 1001-5000 employees
+  + +5000 employees
+  + Other: we should highlight this!
+  + Empty value: we should highlight this!
+  
+This column also has the following Measures:
+
+  + Job Openings (with format `<numbers>` only in `Value` column)
+  + Median Base Pay (with format either `<numbers>.0` or `<numbers>` in `Value` column)
+  
+2. Industry
+
+This value has a number of list of sectors. I'm not going to write it down here. And, this value has the following Measures:
+
+  + Job Openings (with format `<numbers>` only in `Value` column)
+  + Median Base Pay (with format either `<numbers>.0` or `<numbers>` in `Value` column)
+
+3. Job Title
+
+This value has a number of list of job titles. I'm not going to write it down here. And, this value has one Measure only, i.e. Median Base Pay (with format either `$ <numbers>,<numbers>` or `$<numbers>,<numbers>` in `Value` column).
+
+4. Quick Facts
+
+This value's Dimension and Measures are perfectly equal which are the followings:
+
+  + Job Openings (with format `<numbers>,<numbers>` in `Value` column)
+  + Labor Force Size (with format `<numbers>,<numbers>,<numbers>` in `Value` column)
+  + Metro Job Openings (with format `<numbers>,<numbers>` in `Value` column)
+  + Metro Median Pay (with format either `$ <numbers>,<numbers>` or `$<numbers>,<numbers>` in `Value` column)
+  + Total Employment (with format `<number>,<numbers>,<numbers>` in `Value` column)
+  + US Job Openings (with format `<number>,<numbers>,<numbers>` in `Value` column)
+  + US Median Pay (with format `$ <numbers>,<numbers>` in `Value` column)
+  + Unemployment Rate (with format `<number>.<number>%` in `Value` column)
+
+5. Timeseries
+
+This value's Dimension and Measures are perfectly equal which are the followings:
+
+  + Job Openings (with format either `<numbers>.<numbers>` or `<numbers>` in `Value` column)
+  + Median Base Pay (with format either `<numbers>.<numbers>` or `<numbers>` in `Value` column)
+
+Particulary for Labor Force Size, Total Employment, and Unemployment Rate in Quick Facts, I don't need them as their data are too limited. I will remove those later in the next section.
+
+After we saw the data in Excel-like app already, we're going to back to R to manipulate the data. First, let's see the data structure.
+
+```{r}
+str(year20182019)
+```
+
+Based on the information above, we need to change data type a number of columns. However, before we begin do that, for the sake of convenience, we need to fix two columns' name:
+- "Dimension Type" to "Dimention_Type"
+- "Month" to "Date"
+
+```{r}
+year20182019 <- year20182019 %>% rename(Dimension_Type = "Dimension Type", Date = Month)
+```
+
+Then, referring to the data structure above, all columns' data type are in character data type initially. By using our judgement, we're sure the columns of `Date`, `Value`, and `YoY` should be in date, numeric, and numeric data type respectively. But, for the rest of columns, we have to make sure whether they should be left as they are or be changed to factor data type.
+
+## Drop NA Value
+
+As a starter, let's check whether NA exists.
+
+```{r}
+year20182019 %>% is.na() %>% colSums()
+```
+
+We can see that NA exist in `Dimension`, `Value`, and `YoY` columns. Let's see each of column with NA values.
+
+```{r}
+year20182019 %>% filter(is.na(Dimension))
+```
+
+From the dataframe above, it can be seen that the 88 NAs occur on `Dimension_Type == "Company Size"` and `Measure == "Job Openings"` only.
+
+```{r}
+year20182019 %>% filter(is.na(Value))
+```
+
+It can be seen from dataframe above that the 297 NA values in `Value` column only happen in `Dimension_Type == "Timeseries"`, `Dimension == "Job Openings`, and `Dimension == "Job Openings`.
+
+```{r}
+year20182019 %>% filter(is.na(YoY))
+```
+
+From dataframe above, it can be seen that there are lots of NAs in `YoY` column. However, since we're not interested in YoY in this article, it's not a problem if we completely drop this column. Then, we clear all NAs in the other two columns.
+
+```{r}
+DF <- year20182019 %>% select(-c(length(year20182019))) %>% drop_na()
+head(DF)
+is.na(DF) %>% colSums()
+```
+
+In addition, as I pointed earlier, I won't use `Dimension == "Labor Force Size"`, `Dimension == "Total Employment"`, and `Dimension == "Unemployment Rate"`. So, let's drop them down.
+
+```{r}
+DF <- DF %>% filter(Dimension != "Labor Force Size" & 
+                      Dimension != "Total Employment" &
+                      Dimension != "Unemployment Rate")
+head(DF)
+is.na(DF) %>% colSums()
+```
+
+Excellent! All data clean! Then, now let's move on to set the data type of each column.
+
+## Change Data Type
+
+* `Metro` column
+
+```{r}
+unique(DF$Metro)
+```
+
+For `Metro` column, there are 16 unique observations only. However, if you see them more closely, there are some areas with the same meaning but in slight different typing. Therefore, it will be more easier to handle if we tackle with this problem and change this column to factor data type.
+
+```{r}
+DF$Metro <- as.factor(sapply(as.character(DF$Metro), switch, 
+                           "National" = "National",
+                           "Atlanta" = "Atlanta", 
+                           "New York City" = "New York City", 
+                           "Los Angeles" = "Los Angeles", 
+                           "Philadelphia" = "Philadelphia",
+                           "Houston" = "Houston", 
+                           "Seattle" = "Seattle", 
+                           "San Francisco" = "San Francisco", 
+                           "Chicago" = "Chicago",
+                           "Boston" = "Boston", 
+                           "Washington DC" = "Washington DC",
+                           "U.S." = "National", 
+                           "New-York-City" = "New York City",
+                           "Los-Angeles" = "Los Angeles", 
+                           "San-Francisco" = "San Francisco",
+                           "Washington-DC" = "Washington DC"))
+
+levels(DF$Metro)
+```
+
+Great! We've solved the problem and changed the data type of `Metro` column.
+
+* `Dimension_Type` column
+
+```{r}
+unique(DF$Dimension_Type)
+```
+
+For `Dimension_Type` column, there are 5 unique observations only so that no wonder if we need to change its data type to factor immediately.
+
+```{r}
+DF$Dimension_Type <- as.factor(DF$Dimension_Type)
+```
+
+* `Dimension` column
+
+```{r}
+unique(DF$Dimension)
+length(unique(DF$Dimension))
+```
+
+For `Dimension` column, there 135 unique observations. That's a big number! So, we just leave its data type as it is.
+
+* `Measure` column
+
+```{r}
+unique(DF$Measure)
+```
+
+For `Measure` column, there are 6 unique observations only. So, let's change its data type to factor.
+
+```{r}
+DF$Measure <- as.factor(DF$Measure)
+```
+
+* `Date` column
+
+While we're sure `Date` column should be in date data type, we still need to arrange its data type. Before we begin, let's take a quick look at the head and tail of such column.
+
+```{r}
+head(DF$Date)
+tail(DF$Date)
+```
+
+We saw that the format of the column is in year-month, without date. However, since the total number of rows of the data is 50015, we are not sure yet whether all observations of such column are written in the same format. What if there are some row written in year-month-date or even other format?
+
+To answer this, let's see the column deeper by using `unique()`.
+
+```{r}
+as.data.frame(unique(DF$Date))
+```
+
+Bingo! As I told you, there are some with year-month-date format. Therefore, we've got two formats in one column. And since this is annoying, we have to unify all observations to one format only. So, we have two format options: year-month or year-month-date.
+
+If we were to choose the first option, we will lose other observations' date information so that this option is not affordable. Then, if we were to choose another option, the consequence is that we have to coerce the year-month format oservations to year-month-date format. Simply, we could insert 'dummy' date, i.e. 01, at the end of each year-month observation. Therefore, I think it will be more comfortable if we select the second choice.
+
+```{r}
+isString7Chars <- function(input) {
+     if (nchar(input) == 7) {
+          output <- paste0(input, '-01')
+     } else {
+          output <- input
+     }
+}
+
+DF$Date <- as.character(sapply(DF$Date, isString7Chars)) %>% 
+     ymd()
+```
+
+* `Value` column
+
+We stated earlier that `Value` should be in numeric data type. Furthermore, it was mentioned in the beginning of [Data Cleansing](#daclen) that there is a number of `Value` column formats (after removing some rows). They are as follows:
+
+* `<numbers>`
+* `<numbers>.0`
+* `<numbers>,<numbers>`
+* `$ <numbers>,<numbers>`
+* `$<numbers>,<numbers>`
+* `<number>,<numbers>,<numbers>`
+
+Before we jump to data type change, we have to handle those formats to make them in uniform format. We can use the following codes.
+
+```{r}
+DropDollar <- function(input){
+     output <- gsub("\\$", "", input)
+     output <- gsub(" ", "", output)
+     output <- gsub(",", "", output)
+     return(output)
+}
+
+DF$Value <- round(as.numeric(sapply(DF$Value, DropDollar)))
+```
+
+Well done! We have adjusted all columns' format. So, now let's check it the data out to convince ourself that we did well.
+
+```{r}
+head(DF)
+```
+
+Alright. All columns have been in appropriate data type. For the next step, let's move on to the next section below.
+
+## Data Transformation
+
+As our data is too complicated to infer directly from one table, it will be more convenient if we split it into several subtables: salary for each job title, salary for each sector, salary for each company size, job openings for each sector, job openings for each company size, quick facts, and time series.
+
+### Create a Table "Salary for each job title"
+
+This subtable consists of median salary for each job title in a given specific metro area and on a specific date. To create it, we extract some columns from our main data. We're only interested in `Dimension_Type` of `"Job Title"`.
+
+```{r}
+Salary_Jobs <- DF %>%
+  filter(Dimension_Type == "Job Title") %>%
+  select(Metro, Date, Dimension, Value) %>% 
+  rename(Area = Metro, Job_Title = Dimension, Salary = Value)
+head(Salary_Jobs)
+```
+
+Great! We've got what we desired. As we have new table, it's gonna be better if we assign `Job Title` column data type to factor because job titles are just an iteration for each area and date.
+
+```{r}
+Salary_Jobs$Job_Title <- as.factor(Salary_Jobs$Job_Title)
+levels(Salary_Jobs$Job_Title)
+```
+
+### Create a Table "Salary for each sector"
+
+This subtable consists of median salary for each sector in a given specific metro area and on a specific date. To create it, we extract some columns from our main data. We're only interested in `Dimension_Type` of `"Industry"` and `Measure` of `"Median Base Pay"`.
+
+```{r}
+Salary_Sectors <- DF %>%
+  filter(Dimension_Type == "Industry" & Measure == "Median Base Pay") %>%
+  select(Metro, Date, Dimension, Value) %>% 
+  rename(Area = Metro, Sector = Dimension, Salary = Value)
+head(Salary_Sectors)
+```
+
+As we have new table, it's gonna be better if we assign `Sector` column data type to factor because sectors are just an iteration for each area and date.
+
+```{r}
+Salary_Sectors$Sector <- as.factor(Salary_Sectors$Sector)
+levels(Salary_Sectors$Sector)
+```
+
+### Create a Table "Salary for each company size"
+
+This subtable consists of median salary for each company size in a given specific metro area and on a specific date. To create it, we extract some columns from our main data. We're only interested in `Dimension_Type` of `"Company Size"` and `Measure` of `"Median Base Pay"`.
+
+```{r}
+Salary_CompanySize <- DF %>%
+  filter(Dimension_Type == "Company Size" & Measure == "Median Base Pay") %>%
+  select(Metro, Date, Dimension, Value) %>% 
+  rename(Area = Metro, Company_Size = Dimension, Salary = Value)
+head(Salary_CompanySize)
+```
+
+Next, we're going to assign `Company_Size` column data type to factor because company sizes are just an iteration for each area and date.
+
+```{r}
+Salary_CompanySize$Company_Size <- as.factor(Salary_CompanySize$Company_Size)
+levels(Salary_CompanySize$Company_Size)
+```
+
+### Create a Table "Job openings for each sector"
+
+This subtable consists of number of job openings and its YoY for each sector in a given specific metro area and on a specific date. To create it, we extract some columns from our main data. We're only interested in `Dimension_Type` of `"Industry"` and `Measure` of `"Job Openings"`.
+
+```{r}
+JobOpening_Sectors <- DF %>%
+  filter(Dimension_Type == "Industry" & Measure == "Job Openings") %>%
+  select(Metro, Date, Dimension, Value) %>% 
+  rename(Area = Metro, Sector = Dimension, Openings = Value)
+head(JobOpening_Sectors)
+```
+
+And now, we assign `Sector` column data type to factor because sectors are just an iteration for each area and date.
+
+```{r}
+JobOpening_Sectors$Sector <- as.factor(JobOpening_Sectors$Sector)
+levels(JobOpening_Sectors$Sector)
+```
+
+### Create a Table "Job openings for each company size"
+
+This subtable consists of number of job openings and its YoY for each company size in a given specific metro area and on a specific date. To create it, we extract some columns from our main data. We're only interested in `Dimension_Type` of `"Company Size"` and `Measure` of `"Job Openings"`.
+
+```{r}
+JobOpening_CompanySize <- DF %>%
+  filter(Dimension_Type == "Company Size" & Measure == "Job Openings") %>%
+  select(Metro, Date, Dimension, Value) %>% 
+  rename(Area = Metro, Company_Size = Dimension, Openings = Value)
+head(JobOpening_CompanySize)
+```
+
+We remember that as mentioned at the beginning of [Data Cleansing](#daclen) Section, in addition to its normal values, Company Size also has abnormal values, namely "Other" and NA. We tackled the NAs already in the previous section, but not yet for "Other". Therefore, firstly, let's check if "Other" still exists in our data.
+
+```{r}
+unique(JobOpening_CompanySize$Company_Size)
+```
+
+Okay. It's still there. Let's remove it and convert the column to factor data type.
+
+```{r}
+JobOpening_CompanySize <- JobOpening_CompanySize %>% filter(Company_Size != "Other")
+JobOpening_CompanySize$Company_Size <- as.factor(JobOpening_CompanySize$Company_Size)
+```
+
+### Create a Table "Quick facts"
+
+This subtable contains Median Pay and Job Openings data from Glassdoor and US [BLS](https://www.bls.gov/) (Bureau of Labor Statistics) for each area.
+
+```{r}
+QuickFacts <- DF %>%
+  filter(Dimension_Type == "Quick Facts") %>%
+  select(Metro, Date, Dimension, Value) %>%
+  pivot_wider(names_from = Dimension, values_from = Value)
+colnames(QuickFacts) <- c("Area","Date","US_Median_Pay","Metro_Median_Pay",
+                          "JobOpenings","US_JobOpenings","Metro_JobOpenings")
+head(QuickFacts)
+```
+
+NAs identified! This can happen because after we've made the table wider, not each member of Dimension has similar Date attribute. That's why some have certain dates, whereas others have other dates. For this case, I'm going to split up the table based on the columns after `Date` column and remove the NAs subsequently. So, we will have 5 smaller tables.
+
+* Quick Facts for US Median Pay
+
+```{r}
+QuickFacts_USMedianPay <- QuickFacts %>% filter(!is.na(US_Median_Pay)) %>% 
+  select(1:3)
+is.na(QuickFacts_USMedianPay) %>% colSums()
+head(QuickFacts_USMedianPay)
+```
+
+* Quick Facts for Metro Median Pay
+
+```{r}
+QuickFacts_MetroMedianPay <- QuickFacts %>% filter(!is.na(Metro_Median_Pay)) %>% 
+  select(c(1,2,4))
+is.na(QuickFacts_MetroMedianPay) %>% colSums()
+head(QuickFacts_MetroMedianPay)
+```
+
+* Quick Facts for Job Openings
+
+```{r}
+QuickFacts_JobOpenings <- QuickFacts %>% filter(!is.na(JobOpenings)) %>% 
+  select(c(1,2,5))
+is.na(QuickFacts_JobOpenings) %>% colSums()
+head(QuickFacts_JobOpenings)
+```
+
+* Quick Facts for US Job Openings
+
+```{r}
+QuickFacts_USJobOpenings <- QuickFacts %>% filter(!is.na(US_JobOpenings)) %>% 
+  select(c(1,2,6))
+is.na(QuickFacts_USJobOpenings) %>% colSums()
+head(QuickFacts_USJobOpenings)
+```
+
+* Quick Facts for Metro Job Openings
+
+```{r}
+QuickFacts_MetroJobOpenings <- QuickFacts %>% filter(!is.na(Metro_JobOpenings)) %>% 
+  select(c(1,2,7))
+is.na(QuickFacts_MetroJobOpenings) %>% colSums()
+head(QuickFacts_MetroJobOpenings)
+```
+
+### Create a Table "Time Series"
+
+This subtable comes from `Timeseries` column in the main dataframe. It's going to have data of median salary and job openings in certain time interval. It will be more convenient if we split it up into two smaller dataframe.
+
+* Time Series for Job Openings
+
+```{r}
+TimeSeries_JobOpenings <- DF %>%
+  filter(Dimension_Type == "Timeseries" & Dimension == "Job Openings") %>%
+  select(Metro, Date, Value) %>%
+  group_by(Metro, Date) %>%
+  summarise(Job_Openings = mean(Value)) %>%
+  ungroup()
+head(TimeSeries_JobOpenings)
+
+# Also check if NA exist
+is.na(TimeSeries_JobOpenings) %>% colSums()
+```
+
+Cool! Nothing wrong happens. Let's move on to Time Series for Median Salary.
+
+* Time Series for Median Salary
+
+```{r}
+TimeSeries_Salary <- DF %>%
+  filter(Dimension_Type == "Timeseries" & Dimension == "Metro Median Base Pay") %>%
+  select(Metro, Date, Value) %>%
+  group_by(Metro, Date) %>%
+  summarise(Salary = mean(Value)) %>%
+  ungroup()
+head(TimeSeries_Salary)
+```
+
+Though we don't see any NA value, it's not a bad idea if we check the dataframe.
+
+```{r}
+TimeSeries_Salary %>%
+  is.na() %>%
+  colSums()
+```
+
+Great! No NA at all!
+
+And now, we have all transformed the data and are ready for the next section to analyze the data.
+
+# Analysis {#analys}
+
+Finally, we arrive in this section. Here, we're going to solve all problems defined in [Introduction](#intro). So, let's get it started.
+
+## What is the job title paid the most in each area in every given year?
+
+In order to answer this question, we need `Salary_Jobs` dataframe. Afterwards, we filter the data by its each year and each area. Next, for all rows filtered, calculate mean of salary for each job title in 12 months for each year, and then find the max salary from all averaged salary of job titles. The codes to perform these steps can be find below. Firstly, I create a function.
+
+```{r}
+Q1_func <- function(year) {
+  Q1 <- Salary_Jobs[year(Salary_Jobs$Date) == year,]
+  
+  maxPay_eachArea <- vector()
+  maxTitle_eachArea <- vector()
+  
+  areas <- levels(Q1$Area)
+  for (area in areas) {
+    temp <- Q1[Q1$Area == area,]
+    
+    avg <- vector()
+    titles <- vector()
+  
+    temp$Job_Title <-  droplevels(temp$Job_Title)
+    jobs <- levels(temp$Job_Title)
+    
+    for (job in jobs) {
+      avg_buffer <- round(mean(temp[temp$Job_Title == job, "Salary"]))
+      avg <- c(avg, avg_buffer)
+      titles <- c(titles, job)
+    }
+    
+    max_pay <- max(avg)
+    max_title <- titles[which.max(avg)]
+    
+    maxPay_eachArea <- c(maxPay_eachArea, max_pay)
+    maxTitle_eachArea <- c(maxTitle_eachArea, max_title)
+    
+  }
+  Q1_ans <- as.data.frame(cbind(Area = areas,
+                                Job_Title = maxTitle_eachArea, 
+                                Salary = as.numeric(maxPay_eachArea)))
+  return(Q1_ans)
+}
+```
+
+By using above function, we can find highest paid job for each area every year.
+
+  + The highest paid job in 2018
+  
+```{r}
+Q1_ans2018 <- Q1_func(2018)
+Q1_ans2018 <- Q1_ans2018 %>% arrange(desc(Salary))
+Q1_ans2018_subset <- Q1_ans2018[c(1,2,3,4,5,7,8,9,10,11),]
+Q1_ans2018_subset$Salary <- as.numeric(as.character(Q1_ans2018_subset$Salary))
+```
+
+Okay! We've got the data for 2018. Let's plot it!
+
+```{r}
+plot1a <- ggplot(Q1_ans2018_subset, aes(x = reorder(Area, Salary),
+                              y = Salary)) +
+  geom_col(aes(fill = Job_Title)) +
+  coord_flip() +
+  labs(title = "The Highest Paid Jobs in the US in 2018",
+       x = "Metropolitan Area",
+       y = "Annual Salary in USD",
+       fill = "Job Title:") +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = comma) +
+  theme_tufte()
+plot1a
+```
+
+And let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot1a)
+```
+
+  + The highest paid job in 2019
+
+Do the same for the 2019 data.
+
+```{r}
+Q1_ans2019 <- Q1_func(2019)
+Q1_ans2019 <- Q1_ans2019 %>% arrange(desc(Salary))
+Q1_ans2019_subset <- Q1_ans2019[c(1,2,3,4,5,7,8,9,10,11),]
+Q1_ans2019_subset$Salary <- as.numeric(as.character(Q1_ans2019_subset$Salary))
+```
+
+```{r}
+plot1b <- ggplot(Q1_ans2019_subset, aes(x = reorder(Area, Salary),
+                              y = Salary)) +
+  geom_col(aes(fill = Job_Title)) +
+  coord_flip() +
+  labs(title = "The Highest Paid Jobs in the US in 2019",
+       x = "Metropolitan Area",
+       y = "Annual Salary in USD",
+       fill = "Job Title:") +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = comma) +
+  theme_tufte()
+plot1b
+```
+
+And let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot1b)
+```
+
+Nice plots. In order to make the reader easier to compare 2018 and 2019, it will be better if we put both plots side by side. Then, let's combine both data first.
+
+```{r}
+Year <- c(rep(2018, 10), rep(2019, 10))
+Q1_ans_subset <- rbind(Q1_ans2018_subset, Q1_ans2019_subset)
+Q1_ans_subset <- cbind(Q1_ans_subset, Year)
+```
+
+Alright! The data are ready, and let's plot again.
+
+```{r}
+plot1c <- ggplot(Q1_ans_subset, aes(x = reorder(Area, Salary),
+                              y = Salary)) +
+  geom_col(aes(fill = Job_Title)) +
+  coord_flip() +
+  labs(title = "The Highest Paid Jobs in the US in 2018 & 2019",
+       x = "Metropolitan Area",
+       y = "Annual Salary in USD",
+       fill = "Job Title:") +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = comma) +
+  theme_clean() +
+  facet_wrap(~Year)
+plot1c
+```
+
+And let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot1c)
+```
+
+Looking at figures above, Attorney and Pharmacist mostly lead all jobs' salary.
+
+## Which top 5 sectors do pay salary the most in Boston every year?
+
+In order to answer this question, we need `Salary_Sectors` dataframe. Afterwards, we filter the data by its each year and Boston area. Next, for all rows filtered, calculate mean of salary for each job title in 12 months for each year, and then find the top 5 sectors with the highest salary. The codes to perform these steps can be find below.
+
+```{r}
+Q2_func <- function(year) {
+  Q2 <- Salary_Sectors[year(Salary_Sectors$Date) == year & Salary_Sectors$Area == "Boston",]
+
+  pay <- vector()
+  Q2$Sector <-  droplevels(Q2$Sector)
+  sectors <- levels(Q2$Sector)
+  for (sector in sectors) {
+    pay_buffer <- round(mean(Q2[Q2$Sector == sector, "Salary"]))
+    pay <- c(pay, pay_buffer)
+  }
+  year <- rep(year, length(sectors))
+  return(data.frame(Year = year, Sector = sectors, Salary = pay))
+}
+
+Q2_ans2018 <- Q2_func(2018)
+Q2_ans2018 <- Q2_ans2018 %>% arrange(desc(Salary))
+
+Q2_ans2019 <- Q2_func(2019)
+Q2_ans2019 <- Q2_ans2019 %>% arrange(desc(Salary))
+
+Q2_ans <- rbind(head(Q2_ans2018, 5), head(Q2_ans2019, 5))
+```
+
+We've got the data, and now let's plot it.
+
+```{r}
+plot2 <- ggplot(Q2_ans, aes(x = reorder(Sector, Salary),
+                              y = Salary)) +
+  geom_col(aes(fill = Sector), show.legend = F) +
+  coord_flip() +
+  labs(title = "Top 5 Sectors with Highest Salary in the US",
+       x = "Sector",
+       y = "Annual Salary in USD") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  facet_grid(vars(Year), scales = "free") +
+  geom_label(aes(y = Salary, label = Salary), label.size = 0.15, nudge_y = -5000)
+plot2
+```
+
+And let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot2)
+```
+
+From above figures, we can see that top 4 sectors in 2018 and 2019 are the same. Those sectors stay remained in big four for 2 years. The second highest sector, Biotech and Pharmaceuticals, strengthens the relationship between the first and the second questions that Pharmacists, as one of highest paid job, perhaps also work at Biotech and Pharmaceuticals sector which is also one of sectors with highest salary.
+
+## Is it true that a company with more than 5000 employees in San Francisco pays its employees' salary higher than a startup (a company with employees equal or less than 200) in NYC? Show the data in every year! {#q3}
+
+In order to answer this question, we need `Salary_CompanySize` dataframe. Afterwards, we filter the data by San Francisco and New York City areas and company sizes of more than 5000 employees and equal or less than 200.
+
+```{r}
+SF_5000more <- Salary_CompanySize %>% filter(Area == "San Francisco" & Company_Size == "5000+")
+NYC_startup <- Salary_CompanySize %>% 
+  filter(Area == "New York City" & (Company_Size == "51-200" | Company_Size == "<51"))
+head(SF_5000more)
+head(NYC_startup)
+```
+
+Nice! We've got our subset dataframes. Subsequently, in order to answer the third question, it will be too risky if we employ average directly to combine all monthly data in San Francisco and NYC. Therefore, to capture all information missed by the mean method, we're going to use scatter plot for each area.
+
+```{r}
+NYC_startup_agg <- NYC_startup %>% select(Area, Date, Salary) %>% 
+  group_by(Area, Date) %>% 
+  summarise(Mean_Salary = mean(Salary)) %>% 
+  ungroup() %>% 
+  rename(Salary = Mean_Salary)
+
+plot3 <- ggplot(SF_5000more, aes(x = Date,
+                        y = Salary)) +
+  geom_jitter(aes(color = Area)) +
+  geom_jitter(data = NYC_startup_agg, aes(color = Area)) +
+  labs(title = "Salary at SF's Big Corporates & NYC's Startups",
+       x = "Year",
+       y = "Salary in USD",
+       color = "") +
+  scale_color_manual(labels = c("NYC's Startups", "SF's Big Corporates"), values = c("blue", "red")) +
+  theme_gdocs() +
+  theme(axis.text.x = element_text(size = 8), axis.title.x = element_text(size = 11),
+        axis.text.y = element_text(size = 8), axis.title.y = element_text(size = 11),
+        plot.title = element_text(size = 14, face = "bold", color = "darkgreen", hjust = 0.7))
+plot3
+```
+
+And let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot3)
+```
+
+By looking at the figures above, it is proven that for 2018 and 2019, big companies in San Francisco always pay their employees higher than startups in New York City pay. Therefore, there is an advice for this case:
+
+```
+If you were to work in the US and choose either to work in San Francisco or New York City, it is recommended to apply for a job at a big company. It produces more money for you!
+```
+
+## What is the relationship between salary and job openings in the US?
+
+In order to answer this question, we need `TimeSeries_Salary` and `TimeSeries_JobOpenings` dataframes. First of all, let's see the distributions of each dataframe.
+
+* Time Series Salary
+
+```{r}
+SA_withoutNational <- TimeSeries_Salary %>% filter(Metro != "National")
+
+plot4a <- ggplot(SA_withoutNational, aes(x = Metro,
+               y = Salary)) +
+  geom_boxplot(aes(fill = Metro), show.legend = F) +
+  geom_jitter(aes(color = as.factor(year(Date))), alpha = 0.6) +
+  coord_flip() +
+  labs(title = "Distribution of Salary from 2014 to 2019",
+       x = "Area",
+       y = "Salary in USD",
+       color = "Year") +
+  scale_color_calc() +
+  scale_y_continuous(labels = comma) +
+  theme_calc() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
+plot4a
+```
+
+And now let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot4a)
+```
+
+From two figures above, we can see that the salary gradually increases every year, and this occurs evely in each area. With its distribution, San Francisco leads as the area with the highest salary, whereas Atlanta remains the lowest.
+
+* Time Series Job Openings
+
+```{r}
+JO_withoutNational <- TimeSeries_JobOpenings %>% filter(Metro != "National")
+
+plot4b <- ggplot(JO_withoutNational, aes(x = Metro,
+               y = Job_Openings)) +
+  geom_boxplot(aes(fill = Metro), show.legend = F) +
+  geom_jitter(aes(color = as.factor(year(Date))), alpha = 0.5) +
+  coord_flip() +
+  labs(title = "Distribution of Job Openings from 2014 to 2019",
+       x = "Area",
+       y = "Number of Job Openings",
+       color = "Year") +
+  scale_color_calc() +
+  scale_y_continuous(labels = comma) +
+  theme_calc() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
+plot4b
+```
+
+And now let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot4b)
+```
+
+From two figures above, we can see that the job openings gradually tend to grow every year, and this occurs evely in each area. With its distribution, New York City leads as the area with the highest salary (and perhaps the longest distribution), whereas the lowest ones fall on several areas. e.g. Atlanta and Philadelphia.
+
+Afterwards, we group each dataframe in their months and years, make an average of salary and job openings for each group, and then sort them by month and year. After we've got the new dataframes, we can plot them and calculate the correlation.
+
+```{r}
+SA <- TimeSeries_Salary %>% 
+  mutate(Month = month(Date, label = T), Year = year(Date)) %>% 
+  group_by(Metro, Month, Year) %>% 
+  summarise(Mean_Salary = mean(Salary)) %>% 
+  ungroup() %>% 
+  arrange(Year)
+
+JO <- TimeSeries_JobOpenings %>% 
+  mutate(Month = month(Date, label = T), Year = year(Date)) %>% 
+  group_by(Metro, Month, Year) %>% 
+  summarise(Mean_JobOpenings = mean(Job_Openings)) %>% 
+  ungroup() %>%
+  arrange(Year)
+
+SA_JO <- cbind(SA, JO$Mean_JobOpenings) %>% 
+  rename(Salary = Mean_Salary, Job_Openings = "JO$Mean_JobOpenings")
+```
+
+```{r}
+plot4c <- ggplot(SA_JO, aes(x = Salary,
+                  y = Job_Openings)) +
+  geom_jitter(color = "darkgreen") +
+  geom_smooth(method = "auto") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Salary vs Job Openings from 2014 to 2019",
+       x = "Salary in USD",
+       y = "Number of Job Openings") +
+  theme_economist() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
+plot4c
+```
+
+And now let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot4c)
+```
+
+And then calculate the correlation.
+
+``` {r}
+cor_SA_JO <- round(cor(SA$Mean_Salary, JO$Mean_JobOpenings), 3)
+paste0("The corelation value between Salary & Job Openings in the US: ", cor_SA_JO)
+```
+
+As seen in the figures above, almost there is a little relationship between salary and job openings. We could say that in majority, small number (less than 1 million) of job openings spreads somewhat evenly on the salary. High density of the figure can be seen between ranges x: 50K-65K and y:0-1M. Meanwhile, there are some outliers in which small number of salaries is open in a large number of job openings.
+
+In addition to analyze the relationship by viewing on the figure, we can use correlation formula to examine both salary and job openings. We also can see below the figure above that the correlation value of such relationship is `-0.363`. This means that both have a small negative relationship which means when the salary goes up, the job openings somewhat goes down, and vice versa.
+
+## Compare salaries of each area from Metro Median Pay and US Median Pay from Quick Facts!
+
+In order to solve this problem, we need two dataframes, called `QuickFacts_MetroMedianPay` and `QuickFacts_USMedianPay`. Next, we group each in their areas and years to find the mean of salary. After this step has been done, we can combine both dataframes to compare their salary values and plot them.
+
+```{r}
+Q5_DF1 <- QuickFacts_MetroMedianPay %>% 
+  group_by(Area, year(Date)) %>% 
+  summarise(Mean_MetroMedianPay = round(mean(Metro_Median_Pay))) %>% 
+  ungroup() %>% 
+  rename(Year = "year(Date)", "Metro Median Pay" = Mean_MetroMedianPay)
+Q5_DF2 <- QuickFacts_USMedianPay %>% 
+  group_by(Area, year(Date)) %>% 
+  summarise(Mean_USMedianPay = round(mean(US_Median_Pay))) %>% 
+  ungroup() %>% 
+  filter(Area != "National") %>% 
+  rename(Year = "year(Date)", US_Median_Pay = Mean_USMedianPay)
+Q5_DF <- cbind(Q5_DF1, Q5_DF2$US_Median_Pay) %>% 
+  rename("US Median Pay" = "Q5_DF2$US_Median_Pay")
+Q5_DF_long <- Q5_DF %>% pivot_longer(cols = c("Metro Median Pay", "US Median Pay"), names_to = "MedianPay_Type", values_to = "Value")
+```
+
+```{r}
+plot5 <- ggplot(Q5_DF_long, aes(x = reorder(Area, Value),
+                              y = Value,
+                              fill = MedianPay_Type)) +
+  geom_col(aes(fill = MedianPay_Type),
+           position = "dodge") +
+  coord_flip() +
+  labs(title = "Median Salary Based on Glassdoor & BLS",
+       x = "Metropolitan Area",
+       y = "Annual Salary in USD",
+       fill = "Data source:") +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = comma) +
+  theme_get() +
+  facet_wrap(~as.factor(as.character(Year)))
+plot5
+```
+
+And now let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot5)
+```
+
+From both figures above, we can infer that despite of being slight, there exists a rise of median salary from 2018 to 2019 on each median salary type. In addition, we can see clearly that the salary of Metro Median Pay always stays higher than that of US Median Pay.
+
+## Show distributions of company size's job openings and salary!
+
+In order to solve this problem, we need two dataframes, i.e. `JobOpening_CompanySize` and `Salary_CompanySize`. Let's plot each of them.
+
+* Job Openings Based on Company Size
+
+```{r}
+options(scipen = 999)
+JobOpening_CompanySize_NoNat <- JobOpening_CompanySize %>% 
+  filter(Area != "National")
+plot6a <- ggplot(JobOpening_CompanySize_NoNat, aes(x = Company_Size,
+                                   y = Openings)) +
+  geom_jitter(aes(color = Area)) +
+  coord_flip() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Distribution of Job Openings Based on Company Size",
+       x = "Company Size",
+       y = "Number of Openings") +
+  theme_grey() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
+plot6a
+```
+
+And now let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot6a)
+```
+
+From the two figures above, we can see that the majority of company size stays between 0 and 50,000 job openings, whereas the companies with more than 5000 employees tend to open much more job openings, even those in New York City. Probably, this indicates that big corporates have a tendency to possess more budgets to recruit new employees.
+
+Next, let's see the distribution for company size based on their salary.
+
+```{r}
+Salary_CompanySize_noNat <- Salary_CompanySize %>% 
+  filter(Area != "National")
+plot6b <- ggplot(Salary_CompanySize_noNat, aes(x = reorder(Company_Size, Salary),
+                                   y = Salary)) +
+  geom_boxplot(aes(fill = Company_Size), outlier.alpha = 0, show.legend = F) +
+  geom_jitter(aes(color = Area), alpha = 0.5) +
+  coord_flip() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Distribution of Job Salary Based on Company Size",
+       x = "Company Size",
+       y = "Annual Salary in USD") +
+  theme_grey() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
+plot6b
+```
+
+And let's see the plot in an interactive way.
+
+```{r}
+ggplotly(plot6b)
+```
+
+From two figures above, we see something interesting. We can conclude that the more a company has employees, the higher the probability the salary it offers. This interpretation also supports our previous statement in [the third question](#q3) that a big corporate tends to pay higher for its employees.
+
+# Conclusions {#concl}
+
+We've finished all stages to deliver this article. And now, let's conclude all of them:
+
+* We've explained many things about the data used in [Dataset](#daset) section.
+* We've prepared the data, i.e. scraping the Glassdoor website, downloading the files, importing the files to RStudio, and preparing a single dataframe, in [Preparation](#prep).
+* We've performed [Data Cleansing](#daclen) to clean the data.
+* We've transformed the data in [Data Transformation](#datran) so that it can be easily used in the next sections.
+* We've analyzed the data in [Analysis](#analys) to solve all problems.
+  1. Mostly the highest paid jobs are dominated by Attorney and Pharmacist.
+  2. Energy & Utilities, Biotech & Pharmaceuticals, Aerospace & Defense, Computer Software & Hardware, Consulting, and Architecture & Civil Engineering are top 5 sectors with the highest salary in Boston.
+  3. It is true that big corporates in San Francisco pay more for their employees than startups in New York City pay; even the gap is steep enough.
+  4. The relationship between salary and job openings is small negative with correlation value `-0.363`.
+  5. Despite of being slight, there exists a rise of median salary from 2018 to 2019 on each median salary type. The salary of Metro Median Pay always stays higher than that of US Median Pay.
+  6. For job opening case, probably, there is a tendency that big corporates have more budgets to recruit new employees. Meanwhile, for salary case, the more a company has employees, the higher the probability the salary it offers.

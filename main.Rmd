@@ -1,0 +1,183 @@
+---
+title: "Glassdoor US Job Market Data"
+author: "Reza Dwi Utomo @utomoreza"
+output: 
+  flexdashboard::flex_dashboard:
+    vertical_layout: scroll
+    theme: flatly
+    navbar:
+    - { icon: "fa-code", href: "https://github.com/utomoreza/IP_LBB", align: right }
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+```
+
+```{r}
+source("SourceCodes.R")
+```
+
+Charts {data-orientation=rows data-icon="fa-bar-chart"}
+=====================================
+
+## Row 1 {data-width=650}
+-----------------------------------------------------------------------
+
+### The Highest Paid Jobs
+
+```{r}
+plot1c <- ggplot(Q1_ans_subset, aes(x = reorder(Area, Salary),
+                              y = Salary,
+                              text = paste("Job Title:", Job_Title, "<br>",
+                                           "Salary: $", format(Salary, big.mark = ",")))) +
+  geom_col(aes(fill = Job_Title)) +
+  coord_flip() +
+  labs(title = "The Highest Paid Jobs in the US in 2018 & 2019",
+       x = NULL,
+       y = NULL,
+       fill = "Job Title:") +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = comma) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  # theme_clean() +
+  facet_wrap(~Year)
+
+ggplotly(plot1c, tooltip = "text")
+```
+
+### Top 5 Sectors with Highest Salary
+
+```{r}
+plot2 <- ggplot(Q2_ans, aes(x = reorder(Sector, Salary),
+                              y = Salary,
+                            text = paste("Salary $:", format(Salary, big.mark = ",")))) +
+  geom_col(aes(fill = Sector), show.legend = F) +
+  coord_flip() +
+  labs(title = "Top 5 Sectors with Highest Salary in the US",
+       x = NULL,
+       y = "Annual Salary in USD") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  facet_grid(vars(Year), scales = "free") +
+  theme(legend.position = "none")
+
+ggplotly(plot2, tooltip = "text")
+```
+
+Row 2 {data-width=350}
+-----------------------------------------------------------------------
+
+### Distribution of Salary (2014-2019)
+
+```{r}
+plot4a <- ggplot(SA_withoutNational, aes(x = Metro,
+               y = Salary,
+               text = paste("Year:", as.factor(year(Date)), "<br>",
+                            "Area:", Metro, "<br>",
+                            "Salary: $", format(round(Salary), big.mark = ",")))) +
+  geom_boxplot(aes(fill = Metro), show.legend = F) +
+  geom_jitter(aes(color = as.factor(year(Date))), alpha = 0.6, size = 0.4) +
+  coord_flip() +
+  labs(title = "Distribution of Salary from 2014 to 2019",
+       x = NULL,
+       y = "Salary in USD",
+       color = "Year") +
+  scale_color_calc() +
+  scale_y_continuous(labels = comma) +
+  theme_calc() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 10),
+        axis.title.x = element_text(size = 7),
+        axis.title.y = element_text(size = 7),
+        axis.text.x = element_text(size = 5),
+        axis.text.y = element_text(size = 5),
+        legend.position = "none")
+
+ggplotly(plot4a, tooltip = "text")
+```
+
+### Distribution of Job Openings (2014-2019)
+
+```{r}
+plot4b <- ggplot(JO_withoutNational, aes(x = Metro,
+               y = Job_Openings,
+               text = paste("Year:", as.factor(year(Date)), "<br>",
+                            "Area:", Metro, "<br>",
+                            "Openings:", format(round(Job_Openings), big.mark = ",")))) +
+  geom_boxplot(aes(fill = Metro), show.legend = F) +
+  geom_jitter(aes(color = as.factor(year(Date))), alpha = 0.5, size = 0.4) +
+  coord_flip() +
+  labs(title = "Distribution of Job Openings from 2014 to 2019",
+       x = NULL,
+       y = "Number of Job Openings",
+       color = "Year") +
+  scale_color_calc() +
+  scale_y_continuous(labels = comma) +
+  theme_calc() +
+  theme(plot.title = element_text(hjust = 0.2, face = "bold", size = 8),
+        axis.title.x = element_text(size = 7),
+        axis.title.y = element_text(size = 7),
+        axis.text.x = element_text(size = 5),
+        axis.text.y = element_text(size = 5),
+        legend.position = "none")
+
+ggplotly(plot4b, tooltip = "text")
+```
+
+### Salary vs Job Openings (2014-2019)
+
+```{r}
+plot4c <- ggplot(SA_JO, aes(x = Salary,
+                  y = Job_Openings)) +
+  geom_jitter(color = "darkgreen", size = 0.4) +
+  geom_smooth(method = "auto") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Salary vs Job Openings from 2014 to 2019",
+       x = "Salary in USD",
+       y = "Number of Job Openings") +
+  theme_calc() +
+  theme(plot.title = element_text(hjust = 0.2, face = "bold", size = 8),
+        axis.title.x = element_text(size = 7),
+        axis.title.y = element_text(size = 7),
+        axis.text.x = element_text(size = 5),
+        axis.text.y = element_text(size = 5))
+
+ggplotly(plot4c)
+```
+
+Tables {data-orientation=rows data-icon="fa-table"}
+=====================================
+
+## Row 3 {data-width=500}
+-----------------------------------------------------------------------
+
+### Salary of Jobs
+
+```{r}
+datatable(Q1_ans_subset, options = list(scrollX = TRUE))
+```
+
+## Row 4 {data-width=500}
+-----------------------------------------------------------------------
+
+### Salary of Sectors
+
+```{r}
+datatable(Q2_ans, options = list(scrollX = TRUE))
+```
+
+## Row 5 {data-width=500}
+-----------------------------------------------------------------------
+
+### Salary from 2014 to 2019
+
+```{r}
+datatable(SA_withoutNational, options = list(scrollX = TRUE))
+```
+
+### Job Openings from 2014 to 2019
+
+```{r}
+datatable(JO_withoutNational, options = list(scrollX = TRUE))
+```
