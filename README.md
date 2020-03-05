@@ -7,7 +7,7 @@ The programming language used in this repo is R. I also wrote an R markdown file
 * [GitHub Page](https://utomoreza.github.io/IP_LBB/)
 * [RPubs](https://rpubs.com/utomoreza/IP_LBB)
 
-![Flexdashboard](IP_LBB.png)
+![Alt text](IP_LBB.png?raw=true "Flexdashboard")
 
 Feel free if you'd like to clone or download the repo.
 
